@@ -1,4 +1,4 @@
-port module Phoenix exposing (Channel, Channels, Model, Msg, OutMsg(..), init, listen, subscriptions, update)
+port module Phoenix exposing (Channel, Channels, Model, Msg, OutMsg(..), Response, init, listen, pushMsg, subscriptions, update)
 
 import Dict exposing (Dict)
 import Json.Decode as JD exposing (Decoder, Value)
@@ -33,6 +33,7 @@ type Model
         { url : String
         , webSocket : Value
         , channels : Dict String { topic : String, params : Value, isJoined : Bool }
+        , ref : Int
         }
 
 
@@ -71,11 +72,15 @@ type Msg msg
     | Push { url : String, topic : String, event : String, payload : Value, onResponse : Response -> msg }
 
 
+pushMsg : (Msg msg -> msg) -> { url : String, topic : String, event : String, payload : Value, onResponse : Response -> msg } -> msg
+pushMsg onMsg =
+    Push >> onMsg
+
+
 type OutMsg
     = SocketRetry { url : String, wait : Float }
     | SocketConnected { url : String }
     | ChannelMessage Message
-    | ChannelResponse Response
 
 
 
@@ -104,7 +109,7 @@ update doOutMsg doMsg msg model =
         -- Socket has been opened
         ( OnOpen { target }, Opening { url } ) ->
             if JD.decodeValue (JD.field "url" JD.string) target == Ok url then
-                ( Open { url = url, webSocket = target, channels = Dict.empty }
+                ( Open { url = url, webSocket = target, channels = Dict.empty, ref = 0 }
                 , Task.perform doOutMsg (Task.succeed (SocketConnected { url = url }))
                 )
 
@@ -153,24 +158,29 @@ update doOutMsg doMsg msg model =
         ( OnChannelMessage message, _ ) ->
             setOutMsg (ChannelMessage message)
 
-        ( OnChannelResponse response, Open ({ channels } as open) ) ->
-            if response.topic == "phoenix" then
-                doNothing
+        {-
+           ( OnChannelResponse response, Open ({ channels } as open) ) ->
+               if response.topic == "phoenix" then
+                   doNothing
 
-            else
-                case Dict.get response.ref channels of
-                    Nothing ->
-                        setOutMsg (ChannelResponse response)
+               else
+                   case Dict.get response.ref channels of
+                       Nothing ->
+                           setOutMsg (ChannelResponse response)
 
-                    Just ({ topic, isJoined } as channel) ->
-                        if topic == response.topic && not isJoined then
-                            setModel
-                                (Open
-                                    { open | channels = Dict.insert response.ref { channel | isJoined = True } channels }
-                                )
+                       Just ({ topic, isJoined } as channel) ->
+                           if topic == response.topic && not isJoined then
+                               setModel
+                                   (Open
+                                       { open | channels = Dict.insert response.ref { channel | isJoined = True } channels }
+                                   )
 
-                        else
-                            setOutMsg (ChannelResponse response)
+                           else
+                               setOutMsg (ChannelResponse response)
+        -}
+        -- Push message
+        ( Push { url, topic, event, payload, onResponse }, Open ({ webSocket, ref } as open) ) ->
+            setCmd (sendRequest webSocket (push topic event payload ref))
 
         -- Channel subscribed
         ( Heartbeat, Open { webSocket } ) ->
@@ -261,7 +271,7 @@ listen newUrl newChannels model =
             else
                 ( model, Cmd.none )
 
-        Open { url, webSocket, channels } ->
+        Open { url, webSocket, channels, ref } ->
             if url /= newUrl then
                 -- Reopen with new url
                 ( Opening
@@ -307,6 +317,7 @@ listen newUrl newChannels model =
                     , channels =
                         Dict.union unchangedChannels
                             (Dict.map (\_ { topic, params } -> { topic = topic, params = params, isJoined = False }) addedChannels)
+                    , ref = ref
                     }
                 , Cmd.batch
                     (openChannelsCmds
@@ -339,6 +350,15 @@ heartbeat =
     , event = "heartbeat"
     , payload = JE.object []
     , ref = "heartbeat"
+    }
+
+
+push : String -> String -> Value -> Int -> Request
+push topic event payload ref =
+    { topic = topic
+    , event = event
+    , payload = payload
+    , ref = String.fromInt ref
     }
 
 

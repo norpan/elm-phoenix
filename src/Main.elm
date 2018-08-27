@@ -3,6 +3,7 @@ module Main exposing (main)
 import Browser
 import Dict
 import Html exposing (Html)
+import Html.Events
 import Json.Encode as JE
 import Phoenix
 
@@ -12,12 +13,14 @@ type alias Model =
     , phoenixUrl : String
     , phoenixChannels : Phoenix.Channels
     , messages : List Phoenix.OutMsg
+    , response : Maybe Phoenix.Response
     }
 
 
 type Msg
     = PhoenixMsg (Phoenix.Msg Msg)
     | PhoenixOutMsg Phoenix.OutMsg
+    | ButtonClickResponse Phoenix.Response
 
 
 main : Program () Model Msg
@@ -40,6 +43,7 @@ init () =
       , phoenixUrl = "ws://your-url/socket"
       , phoenixChannels = Dict.fromList [ ( "your_channel", { topic = "your_channel", params = JE.object [] } ) ]
       , messages = []
+      , response = Nothing
       }
     , Cmd.map PhoenixMsg phoenixCmd
     )
@@ -79,7 +83,34 @@ update msg model =
             , Cmd.none
             )
 
+        ButtonClickResponse response ->
+            ( { model | response = Just response }
+            , Cmd.none
+            )
+
 
 view : Model -> Html Msg
 view model =
-    Html.text ""
+    Html.div []
+        [ Html.button
+            [ Html.Events.onClick
+                (Phoenix.pushMsg PhoenixMsg
+                    { url = model.phoenixUrl
+                    , topic = "your_channel"
+                    , event = "your_event"
+                    , payload = JE.object []
+                    , onResponse = ButtonClickResponse
+                    }
+                )
+            ]
+            [ Html.text "Send push" ]
+        , case model.response of
+            Nothing ->
+                Html.text ""
+
+            Just response ->
+                Html.dl []
+                    [ Html.dt [] [ Html.text "ref" ]
+                    , Html.dd [] [ Html.text response.ref ]
+                    ]
+        ]
