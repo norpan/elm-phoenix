@@ -1,0 +1,21 @@
+<!DOCTYPE HTML>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <title>Elm Phoenix Channel Test</title>
+    <script src="main.js"></script>
+    <script src="websocket-ports.js"></script>
+</head>
+
+<body>
+    <div id="elm"></div>
+    <script>
+        var app = Elm.Main.init({
+            node: document.getElementById('elm')
+        });
+        websocketBindPorts(app.ports);
+    </script>
+</body>
+
+</html>
