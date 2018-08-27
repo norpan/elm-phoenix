@@ -1,4 +1,4 @@
-port module Phoenix exposing (Channel, Channels, Model, Msg, OutMsg, init, listen, subscriptions, update)
+port module Phoenix exposing (Channel, Channels, Model, Msg, OutMsg(..), init, listen, subscriptions, update)
 
 import Dict exposing (Dict)
 import Json.Decode as JD exposing (Decoder, Value)
@@ -58,7 +58,9 @@ type alias Channel =
     { topic : String, params : Value }
 
 
-type Msg
+{-| Internal messages. Takes a `msg` parameter because the `Push` method will contain an `onResponse` that generates "outer" messages.
+-}
+type Msg msg
     = OnOpen { target : Value }
     | OnError { target : Value }
     | OnChannelMessage Message
@@ -66,11 +68,12 @@ type Msg
     | RetryOpen { target : Value }
     | Heartbeat
     | Error JD.Error
+    | Push { url : String, topic : String, event : String, payload : Value, onResponse : Response -> msg }
 
 
 type OutMsg
     = SocketRetry { url : String, wait : Float }
-    | SocketConnected String
+    | SocketConnected { url : String }
     | ChannelMessage Message
     | ChannelResponse Response
 
@@ -82,28 +85,27 @@ type OutMsg
 {-| Update function
 This is the regular model update function. Also returns an `OutMsg` for messages and responses from channels.
 -}
-update : Msg -> Model -> ( Model, Cmd Msg, Maybe OutMsg )
-update msg model =
+update : (OutMsg -> msg) -> (Msg msg -> msg) -> Msg msg -> Model -> ( Model, Cmd msg )
+update doOutMsg doMsg msg model =
     let
         doNothing =
-            ( model, Cmd.none, Nothing )
+            ( model, Cmd.none )
 
         setModel newModel =
-            ( newModel, Cmd.none, Nothing )
+            ( newModel, Cmd.none )
 
         setCmd cmd =
-            ( model, cmd, Nothing )
+            ( model, cmd )
 
         setOutMsg outMsg =
-            ( model, Cmd.none, Just outMsg )
+            ( model, Task.perform doOutMsg (Task.succeed outMsg) )
     in
     case ( msg, model ) of
         -- Socket has been opened
         ( OnOpen { target }, Opening { url } ) ->
             if JD.decodeValue (JD.field "url" JD.string) target == Ok url then
                 ( Open { url = url, webSocket = target, channels = Dict.empty }
-                , Cmd.none
-                , Just (SocketConnected url)
+                , Task.perform doOutMsg (Task.succeed (SocketConnected { url = url }))
                 )
 
             else
@@ -130,8 +132,10 @@ update msg model =
                                 10000
                 in
                 ( Opening { url = url, attempts = attempts + 1 }
-                , Process.sleep wait |> Task.perform (\_ -> RetryOpen { target = target })
-                , Just (SocketRetry { url = url, wait = wait })
+                , Cmd.batch
+                    [ Process.sleep wait |> Task.perform (\_ -> doMsg (RetryOpen { target = target }))
+                    , Task.perform doOutMsg (Task.succeed (SocketRetry { url = url, wait = wait }))
+                    ]
                 )
 
             else
@@ -170,32 +174,35 @@ update msg model =
 
         -- Channel subscribed
         ( Heartbeat, Open { webSocket } ) ->
-            ( model, sendRequest webSocket heartbeat, Nothing )
+            setCmd (sendRequest webSocket heartbeat)
 
         _ ->
-            ( model, Cmd.none, Nothing )
+            doNothing
 
 
-subscriptions : Model -> Sub Msg
-subscriptions model =
+subscriptions : (Msg msg -> msg) -> Model -> Sub msg
+subscriptions onMsg model =
     case model of
         Closed ->
             webSocketOnError OnError
+                |> Sub.map onMsg
 
         Opening _ ->
             Sub.batch
                 [ webSocketOnOpen OnOpen
                 , webSocketOnError OnError
                 ]
+                |> Sub.map onMsg
 
         Open _ ->
             Sub.batch
                 [ Time.every 30000 (always Heartbeat)
                 , webSocketOnMessage onMessage
                 ]
+                |> Sub.map onMsg
 
 
-onMessage : { target : JD.Value, data : String } -> Msg
+onMessage : { target : JD.Value, data : String } -> Msg msg
 onMessage { data } =
     case JD.decodeString messageOrResponse data of
         Ok msg ->
@@ -205,7 +212,7 @@ onMessage { data } =
             Error e
 
 
-messageOrResponse : Decoder Msg
+messageOrResponse : Decoder (Msg msg)
 messageOrResponse =
     JD.field "event" JD.string
         |> JD.andThen
@@ -395,7 +402,7 @@ responseDecoder =
         (JD.field "ref" JD.string)
 
 
-init : ( Model, Cmd Msg )
+init : ( Model, Cmd (Msg msg) )
 init =
     ( Closed
     , Task.perform identity (Task.succeed Heartbeat)

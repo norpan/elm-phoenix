@@ -16,7 +16,8 @@ type alias Model =
 
 
 type Msg
-    = PhoenixMsg Phoenix.Msg
+    = PhoenixMsg (Phoenix.Msg Msg)
+    | PhoenixOutMsg Phoenix.OutMsg
 
 
 main : Program () Model Msg
@@ -46,7 +47,7 @@ init () =
 
 subscriptions : Model -> Sub Msg
 subscriptions model =
-    Sub.map PhoenixMsg (Phoenix.subscriptions model.phoenix)
+    Phoenix.subscriptions PhoenixMsg model.phoenix
 
 
 phoenixUpdate : Msg -> Model -> ( Model, Cmd Msg )
@@ -61,24 +62,21 @@ phoenixUpdate msg model =
     ( { newModel | phoenix = phoenixModel }, Cmd.batch [ cmd, phoenixCmd ] )
 
 
-maybeToList : Maybe a -> List a
-maybeToList =
-    Maybe.map List.singleton >> Maybe.withDefault []
-
-
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
         PhoenixMsg phoenixMsg ->
             let
-                ( phoenixModel, phoenixCmd, outMsg ) =
-                    Phoenix.update phoenixMsg model.phoenix
+                ( phoenixModel, phoenixCmd ) =
+                    Phoenix.update PhoenixOutMsg PhoenixMsg phoenixMsg model.phoenix
             in
-            ( { model
-                | phoenix = phoenixModel
-                , messages = model.messages ++ maybeToList outMsg
-              }
-            , Cmd.map PhoenixMsg phoenixCmd
+            ( { model | phoenix = phoenixModel }
+            , phoenixCmd
+            )
+
+        PhoenixOutMsg outMsg ->
+            ( { model | messages = outMsg :: model.messages }
+            , Cmd.none
             )
 
 
